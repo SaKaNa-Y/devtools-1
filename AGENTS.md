@@ -6,13 +6,14 @@ Vue DevTools v9 ships two hosts over one kit and one client. The Vite plugin is 
 
 - **`@vue/devtools-kit` + `@vue/devtools-client`** — shared runtime and UI: component tree, state, timeline, Pinia, pages, reactivity graph, and the v6 plugin setup API (`setupDevToolsPlugin`, alias `setupDevtoolsPlugin`).
 - **`vite-plugin-vue-devtools`** — Vite host. Requires Vite 8.3.0+ and a project-level `@vitejs/devtools` (`devtools: { apply: 'serve' }` is recommended) next to `plugins: [vueDevTools()]`. This package does not register `DevTools()` and does not brand the shared Vite shell. Sibling repo: `../vite-devtools`. Read its [AGENTS.md](../vite-devtools/AGENTS.md) before changing dock, command, or open-in-editor behavior.
+- **`@vue/devtools-agent`** — agent (MCP) tools over the kit's runtime requests: apps, component tree and state, inspectors and Pinia, router, value expansion, and guarded state edits. The Vite host registers them through Devframe (`./node` for the host help tool, `./devframe` for per-page tools); `vue-devtools-agent connect` exposes running Devframe instances over stdio MCP. The Chromium extension does not register agent tools.
 - **`@vue/devtools-chrome`** — Chromium MV3 host. Content backend calls `createDevtoolsKit({ clientName: 'chrome-extension' })` on the page and bridges the panel on channel `vue-devtools:chrome-extension`. It works on any page that runs Vue, including apps that never load Vite DevTools.
 
 `devframe` / `@devframes/hub` (docs: [devfra.me](https://devfra.me)) matter on the Vite path: docks, commands, terminals, messages. The extension does not use that hub. Features that only exist when several Vite tools share a UI (custom tabs, commands, split screen, the floating inspector button) belong in Vite DevTools. Vue-level `addCustomTab` / `addCustomCommand` stay removed on both hosts. Custom inspectors, component hooks, timeline layers, and plugin settings stay on the Vue plugin API.
 
 ## Stack & Structure
 
-Monorepo (`pnpm` workspaces). ESM TypeScript. Library packages bundle with Vite Plus (`vp pack`). Node **22.12+**, pnpm **12.5.1** (`packageManager`). Versions live in `pnpm-workspace.yaml` `catalog:` (and matching `overrides`); package entries use `"catalog:"`.
+Monorepo (`pnpm` workspaces). ESM TypeScript. Library packages bundle with tsdown and publish ESM only. Published packages require Node **22.12+**. Building this repository requires Node **22.18+ on 22.x, 24.11+ on 24.x, or 26+**, and pnpm **12.6.0** (`packageManager`). Versions live in `pnpm-workspace.yaml` `catalog:` (and matching `overrides`); package entries use `"catalog:"`.
 
 ### Packages
 
@@ -22,6 +23,7 @@ Monorepo (`pnpm` workspaces). ESM TypeScript. Library packages bundle with Vite 
 | `packages/devtools-api` | `@vue/devtools-api`        | Public plugin API surface over the kit.                                                                                                                      |
 | `packages/client`       | `@vue/devtools-client`     | Vue 3 + UnoCSS UI shared by both hosts. Private. Vite plugin copies the build into `packages/vite/client`; the extension loads the same client in its panel. |
 | `packages/vite`         | `vite-plugin-vue-devtools` | Vite host. Serves the static client and registers an iframe dock with `@vitejs/devtools`.                                                                    |
+| `packages/agent`        | `@vue/devtools-agent`      | Agent tools over the kit runtime, Devframe page/host adapters, and the `vue-devtools-agent` stdio MCP CLI. Used by the Vite host only.                       |
 | `packages/chrome`       | `@vue/devtools-chrome`     | Chromium MV3 host (background, content backend, DevTools panel). Private. Zip via `pnpm zip:chrome`.                                                         |
 
 Other top-level directories:
@@ -39,6 +41,8 @@ flowchart TD
   client --> chrome["chrome extension"]
   kit --> plugin
   kit --> chrome
+  kit --> agent["@vue/devtools-agent"]
+  agent --> plugin
   plugin --> viteHost["@vitejs/devtools"]
   viteHost --> hub["@devframes/hub"]
   hub --> devframe
@@ -49,8 +53,6 @@ flowchart TD
 On the Vite host, docks, commands, terminals, and open-in-editor stay in `@vitejs/devtools`. Open-in-editor is forwarded as `vite:core:open-in-editor`, gated by `capabilities.openInEditor`. The extension panel does not offer open-in-editor; that action exists only in the Vite dock.
 
 `vueDevTools()` options are `enabled` and `appendTo`. Dock layout, built-in integrations, and open-in-editor stay on Vite's `devtools` config. Runtime `budget` is a kit option.
-
-Keep `vite-plus` pinned to exact `0.3.0` in the catalog. `0.3.3` breaks `vp pack` against Vite 8.3, and a caret range still resolves `0.3.3`.
 
 ## Architecture
 

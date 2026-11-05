@@ -1,7 +1,10 @@
 import type { DevtoolsHookTarget, DevtoolsKit } from '@vue/devtools-kit'
 import type { VueDevtoolsDetectionPayload } from '../shared/detection'
 import { startExtensionPageRpcHost, createDevtoolsKit } from '@vue/devtools-kit'
-import { createVueDevtoolsDetectionMessage } from '../shared/detection'
+import {
+  createVueDevtoolsDetectionMessage,
+  isVueDevtoolsDetectionRequestMessage,
+} from '../shared/detection'
 import { isSupportedDevtoolsDocument } from '../shared/document'
 import { CHROME_DEVTOOLS_RPC_CHANNEL_ID } from '../shared/rpc'
 
@@ -17,7 +20,6 @@ interface VueDevtoolsPageTarget extends Window, DevtoolsHookTarget {
   __VUE_DEVTOOLS_BROWSER_EXTENSION_DETECTED__?: boolean
   __VUE_DEVTOOLS_EXTENSION_BACKEND__?: VueDevtoolsExtensionBackend
   __VUE_DEVTOOLS_EXTENSION_STATE__?: VueDevtoolsDetectionPayload
-  __VUE_DEVTOOLS_VITE_PLUGIN_CLIENT_URL__?: string
   __VUE_DEVTOOLS_VITE_PLUGIN_DETECTED__?: boolean
 }
 
@@ -51,8 +53,15 @@ function installBackend(page: VueDevtoolsPageTarget): void {
   }
   page.addEventListener('pageshow', onPageShow)
 
+  const onDetectionRequest = (event: MessageEvent) => {
+    if (event.source === page && isVueDevtoolsDetectionRequestMessage(event.data))
+      publishDetection(page, kit)
+  }
+  page.addEventListener('message', onDetectionRequest)
+
   disposers.push(
     () => page.removeEventListener('pageshow', onPageShow),
+    () => page.removeEventListener('message', onDetectionRequest),
     startExtensionPageRpcHost(kit.rpc, {
       allowedOrigins(origin) {
         return origin === page.location.origin
@@ -120,7 +129,6 @@ function readDetection(page: VueDevtoolsPageTarget, kit: DevtoolsKit): VueDevtoo
     devtoolsEnabled: appCount > 0,
     installed: true,
     nuxtDetected,
-    vitePluginClientUrl: page.__VUE_DEVTOOLS_VITE_PLUGIN_CLIENT_URL__,
     vitePluginDetected: !!page.__VUE_DEVTOOLS_VITE_PLUGIN_DETECTED__,
     vitePressDetected,
     vueDetected,

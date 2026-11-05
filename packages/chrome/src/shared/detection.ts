@@ -1,13 +1,13 @@
 export const VUE_DEVTOOLS_EXTENSION_MESSAGE_SOURCE = 'vue-devtools:chrome'
 export const VUE_DEVTOOLS_DETECTION_EVENT = 'vue-devtools:detection'
 export const VUE_DEVTOOLS_DETECTION_QUERY = 'vue-devtools:detection-query'
+export const VUE_DEVTOOLS_DETECTION_REQUEST = 'vue-devtools:detection-request'
 
 export interface VueDevtoolsDetectionPayload {
   appCount: number
   devtoolsEnabled: boolean
   installed: boolean
   nuxtDetected: boolean
-  vitePluginClientUrl?: string
   vitePluginDetected: boolean
   vitePressDetected: boolean
   vueDetected: boolean
@@ -58,6 +58,30 @@ export function isVueDevtoolsDetectionQueryMessage(
   )
 }
 
+export interface VueDevtoolsDetectionRequestMessage {
+  source: typeof VUE_DEVTOOLS_EXTENSION_MESSAGE_SOURCE
+  type: typeof VUE_DEVTOOLS_DETECTION_REQUEST
+}
+
+export function createVueDevtoolsDetectionRequestMessage(): VueDevtoolsDetectionRequestMessage {
+  return {
+    source: VUE_DEVTOOLS_EXTENSION_MESSAGE_SOURCE,
+    type: VUE_DEVTOOLS_DETECTION_REQUEST,
+  }
+}
+
+export function isVueDevtoolsDetectionRequestMessage(
+  value: unknown,
+): value is VueDevtoolsDetectionRequestMessage {
+  if (!value || typeof value !== 'object') return false
+
+  const message = value as Partial<VueDevtoolsDetectionRequestMessage>
+  return (
+    message.source === VUE_DEVTOOLS_EXTENSION_MESSAGE_SOURCE &&
+    message.type === VUE_DEVTOOLS_DETECTION_REQUEST
+  )
+}
+
 export function isVueDevtoolsDetectionMessage(
   value: unknown,
 ): value is VueDevtoolsDetectionMessage {
@@ -82,7 +106,6 @@ function isVueDevtoolsDetectionPayload(value: unknown): value is VueDevtoolsDete
     typeof payload.nuxtDetected === 'boolean' &&
     typeof payload.vitePluginDetected === 'boolean' &&
     typeof payload.vitePressDetected === 'boolean' &&
-    typeof payload.vueDetected === 'boolean' &&
-    (payload.vitePluginClientUrl == null || typeof payload.vitePluginClientUrl === 'string')
+    typeof payload.vueDetected === 'boolean'
   )
 }

@@ -1,6 +1,7 @@
 import type { PageRuntimeBridgeTarget } from './port-router'
 import { createTabPortRouter } from './port-router'
 import {
+  createVueDevtoolsDetectionRequestMessage,
   isVueDevtoolsDetectionMessage,
   isVueDevtoolsDetectionQueryMessage,
 } from '../shared/detection'
@@ -33,7 +34,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // The devtools page asks for the tab-wide aggregate to decide whether the
   // panel should exist, since Vue may only live in a subframe.
   if (isVueDevtoolsDetectionQueryMessage(message)) {
-    sendResponse(getMergedTabDetectionState(message.tabId))
+    const state = getMergedTabDetectionState(message.tabId)
+    // Detection state is lost when Chrome stops this service worker, and frames stop
+    // publishing once they find Vue. Ask them again; the devtools page keeps polling.
+    if (!state?.vueDetected) requestTabDetection(message.tabId)
+    sendResponse(state)
     return
   }
 
@@ -49,8 +54,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     injectPageRuntimeBridge({ tabId, frameId })
 })
 
+function requestTabDetection(tabId: number): void {
+  chrome.tabs.sendMessage(tabId, createVueDevtoolsDetectionRequestMessage(), () => {
+    void chrome.runtime.lastError
+  })
+}
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'loading') resetTabDetectionState(tabId)
+  // Same-document navigations (history.pushState, hash changes) also report `loading`, but the
+  // page is not reloaded, so it never publishes again on its own. Ask once loading completes.
+  else if (changeInfo.status === 'complete') requestTabDetection(tabId)
 })
 
 chrome.tabs.onRemoved.addListener((tabId) => {

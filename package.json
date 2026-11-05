@@ -1,6 +1,6 @@
 {
   "name": "@vue/devtools-monorepo",
-  "version": "9.0.0-beta.0",
+  "version": "9.0.0-rc.2",
   "private": true,
   "description": "DevTools for Vue.js",
   "keywords": [
@@ -20,7 +20,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "build": "vp run --filter './packages/*' --filter '!vite-plugin-vue-devtools' build && vp run --filter vite-plugin-vue-devtools build",
+    "build": "pnpm --filter './packages/*' --filter '!vite-plugin-vue-devtools' -r build && pnpm --filter vite-plugin-vue-devtools build",
     "check": "vp check",
     "dep:up": "taze -I major -r",
     "docs": "pnpm -C docs docs:dev",
@@ -33,6 +33,7 @@
     "pack": "pnpm build",
     "play": "pnpm --filter @vue/devtools-playground-basic dev",
     "play:reactivity-graph": "pnpm --filter @vue/devtools-playground-reactivity-graph dev",
+    "play:vapor": "pnpm --filter @vue/devtools-playground-vapor dev",
     "postinstall": "simple-git-hooks",
     "release": "bumpp -r",
     "release-extension": "pnpm build && node scripts/release-extension.mjs && pnpm zip",
@@ -41,7 +42,7 @@
     "test:integration": "vitest run tests/integration",
     "test:performance": "vitest run --config vitest.performance.config.ts",
     "test:smoke:chrome": "pnpm --filter @vue/devtools-kit build && pnpm --filter @vue/devtools-client build && pnpm --filter @vue/devtools-chrome build && vitest run --config vitest.smoke.config.ts",
-    "test:smoke:vite": "pnpm --filter @vue/devtools-kit build && pnpm --filter @vue/devtools-client build && pnpm --filter vite-plugin-vue-devtools build && vitest run --config vitest.smoke.config.ts tests/smoke/vite-client-injection.test.ts",
+    "test:smoke:vite": "pnpm --filter @vue/devtools-kit build && pnpm --filter @vue/devtools-client build && pnpm --filter @vue/devtools-agent build && pnpm --filter vite-plugin-vue-devtools build && vitest run --config vitest.smoke.config.ts tests/smoke/vite-client-injection.test.ts tests/smoke/agent.test.ts",
     "test:unit": "vitest run tests/unit",
     "test:watch": "vitest",
     "typecheck": "vue-tsc --noEmit -p packages/client/tsconfig.json",
@@ -50,6 +51,7 @@
   },
   "devDependencies": {
     "@clack/prompts": "catalog:",
+    "@modelcontextprotocol/client": "catalog:",
     "@types/chrome": "catalog:",
     "@types/node": "catalog:",
     "@vitejs/devtools": "catalog:",
@@ -73,6 +75,7 @@
     "vite-plus": "catalog:",
     "vitest": "catalog:",
     "vue": "catalog:",
+    "vue-3.6": "catalog:",
     "vue-tsc": "catalog:"
   },
   "simple-git-hooks": {
@@ -86,7 +89,7 @@
     "*.{json,jsonc,json5,yaml,yml,md,mdx,html,css,scss,sass,less,graphql,gql,toml}": "vp fmt"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": "^22.18.0 || ^24.11.0 || >=26.0.0"
   },
-  "packageManager": "pnpm@12.6.0"
+  "packageManager": "pnpm@12.16.1"
 }

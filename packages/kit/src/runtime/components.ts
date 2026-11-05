@@ -60,6 +60,7 @@ export class ComponentTreeStore {
       case 'component:update': {
         if (!record) return
         const patches = this.upsert(record)
+        if (event.type === 'component:update') patches.push(...this.refreshChildOrder(record))
 
         const visible = this.getVisibleNodes(event.appId)
         const expanded = this.getExpandedNodes(event.appId)
@@ -107,6 +108,23 @@ export class ComponentTreeStore {
         return
       }
     }
+  }
+
+  search(appId: AppId | undefined, needle: string, limit = 100): ComponentTreeSnapshot {
+    const app = appId ? this.registry.getApp(appId) : this.registry.listApps()[0]
+    if (!app) return { appId, version: 0, nodes: [] }
+    const query = needle.toLowerCase()
+    const nodes: ComponentSnapshot[] = []
+    for (const record of this.registry.refreshComponentTree(app.id)) {
+      if (record.hidden) continue
+      const matches = [record.name, record.file].some(
+        (value) => typeof value === 'string' && value.toLowerCase().includes(query),
+      )
+      if (!matches) continue
+      nodes.push(this.toSnapshot(record))
+      if (nodes.length >= limit) break
+    }
+    return { appId: app.id, version: this.appVersions.get(app.id) ?? 0, nodes }
   }
 
   snapshot(appId?: AppId): ComponentTreeSnapshot {
@@ -325,6 +343,30 @@ export class ComponentTreeStore {
     this.appVersions.delete(appId)
     this.visibleNodesByApp.delete(appId)
     this.expandedNodesByApp.delete(appId)
+  }
+
+  // Keyed reorders patch the parent only; its children keep stale `domOrder`.
+  private refreshChildOrder(parent: ComponentRecord): ComponentTreePatch[] {
+    if (!this.getExpandedNodes(parent.appId).has(parent.id)) return []
+    const nodes = this.getNodes(parent.appId)
+    const ids = [...(this.getChildren(parent.appId).get(parent.id) ?? [])]
+    if (ids.length < 2) return []
+
+    const sort = () => [...ids].sort((a, b) => compareComponentOrder(nodes.get(a), nodes.get(b)))
+    const before = sort()
+    const patches: ComponentTreePatch[] = []
+    const cache = new ComponentDomOrderCache()
+    for (const id of ids) {
+      const child = this.registry.getComponent(id, parent.appId)
+      if (!child) continue
+      this.registry.refreshDomOrder(child, cache)
+      patches.push(...this.upsert(child, false))
+    }
+    const after = sort()
+    if (after.some((id, index) => id !== before[index])) {
+      patches.push({ op: 'reorder', parentId: parent.id, children: after })
+    }
+    return patches
   }
 
   private upsert(record: ComponentRecord, updateParentCounts = true): ComponentTreePatch[] {

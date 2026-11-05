@@ -22,11 +22,13 @@ function createIifeConfig(name: string, entry: string) {
     format: 'iife' as const,
     globalName: 'VueDevtoolsChrome',
     hash: false,
+    minify: true,
     outputOptions: {
       codeSplitting: false,
       entryFileNames: '[name].js',
     },
     platform: 'browser' as const,
+    sourcemap: false,
     target: 'esnext',
   }
 }
@@ -45,6 +47,7 @@ export default defineConfig([
     dts: false,
     format: 'esm',
     hash: false,
+    minify: true,
     platform: 'browser',
     sourcemap: false,
     target: 'esnext',

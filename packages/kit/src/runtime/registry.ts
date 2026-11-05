@@ -4,6 +4,15 @@ import type {
   ComponentTreeNodeTag,
   ComponentTreeNodeSnapshot,
 } from '../protocol/messages'
+import {
+  isForBlock,
+  isForFragment,
+  isInteropFragment,
+  isTeleportFragment,
+  isVaporApp,
+  isVaporFragment,
+  isVaporInstance,
+} from './vapor'
 import type { AppId, AppRef, ComponentId, InstanceRef, RuntimeEvent, VueTypeMap } from './types'
 
 export interface ComponentRecord {
@@ -40,6 +49,7 @@ export interface AppRecord {
   app: AppRef
   vueTypes?: VueTypeMap
   rootInstance?: InstanceRef
+  vapor?: boolean
   components: Map<ComponentId, ComponentRecord>
   createdAt: number
   updatedAt: number
@@ -49,6 +59,8 @@ export type { AppSnapshot, ComponentTreeNodeTag } from '../protocol/messages'
 export type ComponentSnapshot = ComponentTreeNodeSnapshot
 
 interface ComponentRecordOverrides {
+  // Vapor `v-for` keys live on the enclosing `ForBlock`, not on the instance.
+  renderKey?: unknown
   inactive?: boolean
   tags?: ComponentTreeNodeTag[]
   domOrder?: number[]
@@ -60,6 +72,7 @@ export interface WalkedComponentChild {
   instance: InstanceRef
   tags?: ComponentTreeNodeTag[]
   inactive?: boolean
+  renderKey?: unknown
 }
 
 // Cross-task caches must observe child-list mutations, including equal-length
@@ -109,6 +122,11 @@ export class RuntimeRegistry {
   private apps = new Map<AppId, AppRecord>()
   private componentIds = new WeakMap<InstanceRef, ComponentId>()
   private retiredApps = new WeakSet<AppRef>()
+  // Children reported by `component:added` under a Vapor parent. A Vapor block only
+  // holds child instances that are block roots; children inserted into an element
+  // (`<div><Child /></div>`) are not reachable from the parent at all. Filled by the
+  // hook (`trackVaporChild`), including events that arrive before `app:init`.
+  private vaporChildren = new WeakMap<InstanceRef, Set<InstanceRef>>()
   private eventDomOrder?: ComponentDomOrderCache
 
   private getEventDomOrder(): ComponentDomOrderCache {
@@ -160,6 +178,7 @@ export class RuntimeRegistry {
       app,
       vueTypes,
       rootInstance,
+      vapor: isVaporApp(app) || undefined,
       components: new Map(),
       createdAt: time,
       updatedAt: time,
@@ -216,7 +235,9 @@ export class RuntimeRegistry {
       existing.parentId = parentId
       existing.name = readComponentName(instance)
       existing.file = readComponentFile(instance)
-      existing.renderKey = readComponentRenderKey(instance)
+      existing.renderKey =
+        readComponentRenderKey(instance, overrides.renderKey) ??
+        (isVaporInstance(instance) ? existing.renderKey : undefined)
       existing.inactive = overrides.inactive ?? isComponentInactive(instance)
       existing.isFragment = isFragmentComponent(instance, app)
       existing.hidden = isComponentHidden(instance)
@@ -236,7 +257,7 @@ export class RuntimeRegistry {
       parentId,
       name: readComponentName(instance),
       file: readComponentFile(instance),
-      renderKey: readComponentRenderKey(instance),
+      renderKey: readComponentRenderKey(instance, overrides.renderKey),
       inactive: overrides.inactive ?? isComponentInactive(instance),
       isFragment: isFragmentComponent(instance, app),
       hidden: isComponentHidden(instance),
@@ -286,13 +307,14 @@ export class RuntimeRegistry {
       records.push(record)
       if (depth >= maxDepth) return
 
-      const children = getInternalInstanceChildren(instance)
+      const children = this.getInstanceChildren(instance)
       const activeChildren = new Set(children.map((child) => child.instance))
 
       for (const child of children) {
         walk(child.instance, instance, depth + 1, {
           inactive: overrides.inactive || child.inactive,
           tags: child.tags,
+          renderKey: child.renderKey,
         })
       }
 
@@ -323,6 +345,37 @@ export class RuntimeRegistry {
 
     app.components.delete(id)
     return record
+  }
+
+  // Block-walked children first (they carry tags and render keys), then any
+  // reported child the block does not reach. A deactivated kept-alive child is left
+  // to the KeepAlive cache walk; only its own flag is checked, so descendants of a
+  // cached component stay in the tree.
+  getInstanceChildren(instance: InstanceRef): WalkedComponentChild[] {
+    const children = getInternalInstanceChildren(instance)
+    const tracked = isVaporInstance(instance) ? this.vaporChildren.get(instance) : undefined
+    if (!tracked?.size) return children
+
+    const walked = new Set(children.map((child) => child.instance))
+    for (const child of tracked) {
+      if (walked.has(child) || isBeingDestroyed(child) || isComponentHidden(child)) continue
+      if (readBooleanProperty(child, 'isDeactivated') === true) continue
+      children.push({ instance: child })
+    }
+    return children
+  }
+
+  trackVaporChild(instance: InstanceRef): void {
+    const parent = readObjectProperty(instance, 'parent')
+    if (!parent || !isVaporInstance(parent)) return
+    const children = this.vaporChildren.get(parent) ?? new Set<InstanceRef>()
+    children.add(instance)
+    this.vaporChildren.set(parent, children)
+  }
+
+  untrackVaporChild(instance: InstanceRef): void {
+    const parent = readObjectProperty(instance, 'parent')
+    if (parent) this.vaporChildren.get(parent)?.delete(instance)
   }
 
   getApp(appId: AppId): AppRecord | undefined {
@@ -375,7 +428,7 @@ export class RuntimeRegistry {
   }
 
   getComponentChildCount(record: ComponentRecord): number {
-    const children = getInternalInstanceChildren(record.instance).map((child) => child.instance)
+    const children = this.getInstanceChildren(record.instance).map((child) => child.instance)
     const childInstances = new Set(children)
     if (isKeepAlive(record.instance)) {
       for (const cached of getKeepAliveCachedInstances(record.instance)) childInstances.add(cached)
@@ -384,7 +437,7 @@ export class RuntimeRegistry {
   }
 
   getComponentChildren(record: ComponentRecord): WalkedComponentChild[] {
-    const children = getInternalInstanceChildren(record.instance)
+    const children = this.getInstanceChildren(record.instance)
     if (isKeepAlive(record.instance)) {
       const active = new Set(children.map((child) => child.instance))
       for (const instance of getKeepAliveCachedInstances(record.instance)) {
@@ -410,9 +463,14 @@ export class RuntimeRegistry {
       {
         inactive: parent.inactive || child.inactive,
         tags: child.tags,
+        renderKey: child.renderKey,
       },
       cache,
     )
+  }
+
+  refreshDomOrder(record: ComponentRecord, cache: ComponentDomOrderCache): void {
+    record.domOrder = readComponentDomOrder(record.instance, cache)
   }
 
   toAppSnapshot(record: AppRecord): AppSnapshot {
@@ -462,7 +520,7 @@ function readAppName(app: object): string | undefined {
   return component ? readStringProperty(component, 'name') : undefined
 }
 
-function readComponentName(instance: object): string {
+export function readComponentName(instance: object): string {
   const type = readObjectProperty(instance, 'type')
   if (type) {
     const name =
@@ -481,11 +539,17 @@ function readComponentFile(instance: object): string | undefined {
   return type ? readStringProperty(type, '__file') : undefined
 }
 
-function readComponentRenderKey(instance: object): string | number | undefined {
-  const vnode = readObjectProperty(instance, 'vnode')
-  if (!vnode) return
-
-  const value = readUnknownProperty(vnode, 'key')
+function readComponentRenderKey(
+  instance: object,
+  walkedKey?: unknown,
+): string | number | undefined {
+  let value = walkedKey
+  if (value == null) {
+    const vapor = isVaporInstance(instance)
+    const keyOwner = vapor ? instance : readObjectProperty(instance, 'vnode')
+    if (!keyOwner) return
+    value = readUnknownProperty(keyOwner, vapor ? '$key' : 'key')
+  }
   if (value == null) return
   if (typeof value === 'number') return value
   if (typeof value === 'string') return `'${value}'`
@@ -505,6 +569,8 @@ function isComponentInactive(instance: object): boolean {
 }
 
 function isFragmentComponent(instance: object, app: AppRecord): boolean {
+  if (isVaporInstance(instance)) return isVaporFragmentRoot(readUnknownProperty(instance, 'block'))
+
   const subtree = readObjectProperty(instance, 'subTree')
   if (!subtree) return false
   return readUnknownProperty(subtree, 'type') === app.vueTypes?.Fragment
@@ -582,9 +648,54 @@ function readComponentDomOrder(
   return indexList.reverse()
 }
 
+// Mirrors VDOM: a root renders as a fragment when it is a list or a `v-for`.
+function isVaporFragmentRoot(block: unknown): boolean {
+  if (Array.isArray(block)) return block.length > 1 || isVaporFragmentRoot(block[0])
+  if (!isVaporFragment(block)) return false
+  if (isInteropFragment(block)) return false
+  return isForFragment(block) || isVaporFragmentRoot(readUnknownProperty(block, 'nodes'))
+}
+
 function getInternalInstanceChildren(instance: object): WalkedComponentChild[] {
+  if (isVaporInstance(instance)) {
+    const block =
+      readUnknownProperty(instance, 'pendingBlock') ?? readUnknownProperty(instance, 'block')
+    return getInternalInstanceChildrenFromBlock(block)
+  }
   const subtree = readObjectProperty(instance, 'subTree')
   return subtree ? getInternalInstanceChildrenFromVNode(subtree) : []
+}
+
+const TELEPORT_TAG: ComponentTreeNodeTag = {
+  label: 'teleport',
+  textColor: 0xffffff,
+  backgroundColor: 0x8b5cf6,
+}
+
+// Walks a Vapor `Block` (Node | VaporComponentInstance | VaporFragment | Block[]).
+function getInternalInstanceChildrenFromBlock(
+  block: unknown,
+  tags: ComponentTreeNodeTag[] = [],
+  renderKey?: unknown,
+): WalkedComponentChild[] {
+  if (block == null || typeof block !== 'object') return []
+  if (Array.isArray(block)) {
+    return block.flatMap((child) => getInternalInstanceChildrenFromBlock(child, tags, renderKey))
+  }
+  if (isVaporInstance(block)) {
+    return !isBeingDestroyed(block) && !isComponentHidden(block)
+      ? [{ instance: block, tags, renderKey }]
+      : []
+  }
+  if (!isVaporFragment(block)) return []
+  if (isInteropFragment(block)) {
+    return block.vnode ? getInternalInstanceChildrenFromVNode(block.vnode, tags) : []
+  }
+  const nextTags =
+    isTeleportFragment(block) && !tags.includes(TELEPORT_TAG) ? [...tags, TELEPORT_TAG] : tags
+  // Only a component directly inside a `v-for` item takes the item key.
+  const nextKey = isForBlock(block) ? readUnknownProperty(block, 'key') : undefined
+  return getInternalInstanceChildrenFromBlock(block.nodes, nextTags, nextKey)
 }
 
 function getInternalInstanceChildrenFromVNode(
@@ -636,12 +747,14 @@ function getKeepAliveCachedInstances(instance: object): InstanceRef[] {
   const cache = readUnknownProperty(instance, '__v_cache')
   if (!(cache instanceof Map)) return []
 
+  // VDOM caches vnodes; Vapor caches instances or interop fragments wrapping a vnode.
   return Array.from(cache.values())
-    .map((vnode) =>
-      vnode != null && typeof vnode === 'object'
-        ? readObjectProperty(vnode, 'component')
-        : undefined,
-    )
+    .map((entry) => {
+      if (entry == null || typeof entry !== 'object') return
+      if (isVaporInstance(entry)) return entry
+      const vnode = isInteropFragment(entry) ? entry.vnode : entry
+      return vnode ? readObjectProperty(vnode, 'component') : undefined
+    })
     .filter((component): component is InstanceRef => !!component)
 }
 
